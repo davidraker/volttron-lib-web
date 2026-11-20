@@ -28,7 +28,7 @@ werkzeug = ">=2.1.2"
 ws4py = ">=0.5.1"
 
 [tool.poetry.group.dev.dependencies]
-volttron-testing = ">=0.5.1rc4"
+volttron-testing = ">0.5.1rc4"    # platform_cli and configs (first released after 0.5.1rc4)
 pytest = ">=7.0"
 mock = ">=5.0"
 deepdiff = "^6.3.0"

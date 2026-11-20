@@ -11,37 +11,15 @@ from pathlib import Path
 import pytest
 import requests
 
-from platform_cli import PlatformCLI
+from volttrontesting.configs import AgentSources
+from volttrontesting.platform_cli import PlatformCLI
 
-MODULAR = Path(__file__).resolve().parents[3]
-
-
-def _editable_source(distribution: str) -> Path | None:
-    """The source checkout a distribution was installed editable from, if any."""
-    from importlib import metadata
-    try:
-        direct_url = metadata.distribution(distribution).read_text('direct_url.json')
-    except metadata.PackageNotFoundError:
-        return None
-    info = json.loads(direct_url) if direct_url else {}
-    if info.get('dir_info', {}).get('editable'):
-        return Path(info['url'].removeprefix('file://'))
-    return None
-
-
-def _source(distribution: str, monorepo_path: Path) -> Path | None:
-    """Prefer the editable checkout in the test venv, then the monorepo layout beside this repository."""
-    editable = _editable_source(distribution)
-    if editable is not None and editable.is_dir():
-        return editable
-    return monorepo_path if monorepo_path.is_dir() else None
-
-
-# The Platform Driver is installed from its source checkout when one is known, otherwise from PyPI by name.
-PLATFORM_DRIVER_SOURCE = str(_source('volttron-platform-driver', MODULAR / 'drivers' / 'platform-driver-agent')
-                             or 'volttron-platform-driver')
+# Checkouts when they can be found (an editable install, VOLTTRON_MODULAR_DRIVERS, or this repository's place in the
+# modular tree); the Platform Driver falls back to its PyPI name.
+SOURCES = AgentSources(anchor=__file__)
+PLATFORM_DRIVER_SOURCE = SOURCES.resolve('platform-driver')
 # fake.config and fake.csv ship at the root of the fake driver's source tree, not in its package.
-FAKE_DRIVER_DIR = _source('volttron-lib-fake-driver', MODULAR / 'drivers' / 'interfaces' / 'fake')
+FAKE_DRIVER_DIR = SOURCES.checkout('fake-driver')
 REGISTRY_CONFIG = 'registry_configs/fake.csv'
 
 PLATFORM_DRIVER = 'platform.driver'
@@ -81,12 +59,14 @@ def _device_config(tmp_path_factory) -> Path:
 def platform(tmp_path_factory):
     if os.environ.get('WEB_SKIP_E2E'):
         pytest.skip('WEB_SKIP_E2E is set')
-    if not PlatformCLI.available():
-        pytest.skip('volttron, vctl and a message bus package (volttron-lib-zmq) are not all installed in this environment')
+    missing = PlatformCLI.missing(web=True)
+    if missing:
+        pytest.skip(f'cannot start a platform with the web service here; missing: {", ".join(missing)}')
     if FAKE_DRIVER_DIR is None:
         pytest.skip('the fake driver source tree (fake.config, fake.csv) was not found; install volttron-lib-fake-driver '
                     'editable from its checkout')
-    cli = PlatformCLI(tmp_path_factory.mktemp('platform') / 'volttron_home', rpc_allow_list=RPC_ALLOW_LIST)
+    cli = PlatformCLI(tmp_path_factory.mktemp('platform') / 'volttron_home', 'web-e2e', web=True,
+                      rpc_allow_list=RPC_ALLOW_LIST)
     cli.start()
     try:
         cli.add_web_user(USERNAME, PASSWORD)
@@ -104,9 +84,8 @@ def config_write_capability(platform):
     """Grant platform.web the config-store write capabilities. libauth grants it only control.* by default, so an
     operator must do this before the config write endpoints work; tests that write configs request this fixture, and
     a test that runs before any of them checks the 403 given without it."""
-    platform.vctl('authz', 'add', 'agent', 'platform.web', '--rpc-capabilities',
-                  'platform.config_store.set_config', 'platform.config_store.delete_config',
-                  'platform.config_store.delete_store')
+    platform.grant('platform.web', 'platform.config_store.set_config', 'platform.config_store.delete_config',
+                   'platform.config_store.delete_store')
     return True
 
 
