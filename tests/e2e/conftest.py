@@ -1,10 +1,11 @@
 """Fixtures for the live web-service tests.
 
 A real platform is started in a temporary VOLTTRON_HOME with the web service enabled, one web user, the Platform
-Driver with a fake device, and a listener agent. Set WEB_SKIP_E2E=1 to skip these tests.
+Driver with a fake device, and a listener agent, built on volttron-testing's ``web_platform`` fixture (one platform
+for the session: ``volttron_platform_scope = session`` in pyproject.toml). Set VOLTTRON_TESTING_SKIP_PLATFORM=1 to
+skip these tests.
 """
 import json
-import os
 import time
 from pathlib import Path
 
@@ -12,7 +13,7 @@ import pytest
 import requests
 
 from volttrontesting.configs import AgentSources
-from volttrontesting.platform_cli import PlatformCLI
+from volttrontesting.plugin import WebUser, install_platform_driver
 
 # Checkouts when they can be found (an editable install, VOLTTRON_MODULAR_DRIVERS, or this repository's place in the
 # modular tree); the Platform Driver falls back to its PyPI name.
@@ -56,27 +57,25 @@ def _device_config(tmp_path_factory) -> Path:
 
 
 @pytest.fixture(scope='session')
-def platform(tmp_path_factory):
-    if os.environ.get('WEB_SKIP_E2E'):
-        pytest.skip('WEB_SKIP_E2E is set')
-    missing = PlatformCLI.missing(web=True)
-    if missing:
-        pytest.skip(f'cannot start a platform with the web service here; missing: {", ".join(missing)}')
+def web_platform_options():
+    return dict(instance_name='web-e2e', rpc_allow_list=RPC_ALLOW_LIST)
+
+
+@pytest.fixture(scope='session')
+def web_user():
+    return WebUser(USERNAME, PASSWORD)
+
+
+@pytest.fixture(scope='session')
+def platform(web_platform, tmp_path_factory):
     if FAKE_DRIVER_DIR is None:
         pytest.skip('the fake driver source tree (fake.config, fake.csv) was not found; install volttron-lib-fake-driver '
                     'editable from its checkout')
-    cli = PlatformCLI(tmp_path_factory.mktemp('platform') / 'volttron_home', 'web-e2e', web=True,
-                      rpc_allow_list=RPC_ALLOW_LIST)
-    cli.start()
-    try:
-        cli.add_web_user(USERNAME, PASSWORD)
-        cli.install_agent(PLATFORM_DRIVER_SOURCE, vip_identity=PLATFORM_DRIVER, tag='driver')
-        cli.store_config(PLATFORM_DRIVER, REGISTRY_CONFIG, FAKE_DRIVER_DIR / 'fake.csv', csv=True)
-        cli.store_config(PLATFORM_DRIVER, f'devices/{DEVICE_TOPIC}', _device_config(tmp_path_factory))
-        cli.install_agent('volttron-listener', vip_identity=LISTENER, tag='listener')
-        yield cli
-    finally:
-        cli.shutdown()
+    driver = install_platform_driver(web_platform, PLATFORM_DRIVER_SOURCE, identity=PLATFORM_DRIVER)
+    driver.store_registry(REGISTRY_CONFIG, FAKE_DRIVER_DIR / 'fake.csv')
+    driver.store_device(DEVICE_TOPIC, _device_config(tmp_path_factory))
+    web_platform.install_agent('volttron-listener', vip_identity=LISTENER, tag='listener')
+    return web_platform
 
 
 @pytest.fixture(scope='session')
